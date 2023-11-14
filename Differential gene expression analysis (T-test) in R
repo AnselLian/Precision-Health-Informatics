@@ -1,0 +1,177 @@
+---
+title: " Group comparison T test"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+#Step 0 - Check clinical and molecular data 
+#Step 1 - Read in data
+```{r}
+
+clinData <- read.table(file = "input/CRC_PILOT_clinical_data_HIDS.tsv",
+                       sep="\t", 
+                       header = T, 
+                       stringsAsFactors = F, row.names = 1)
+knitr::kable(head(clinData[,1:4],n = 5))
+```
+```{r}
+geneExp <- read.table(file = "input/CRC_PILOT_withGeneAnno.tsv",
+                      sep="\t",
+                      row.names = 1,
+                      header = T,
+                      stringsAsFactors = F)
+                      knitr::kable(geneExp[1:5, 1:4], caption = "Processed gene expression data in log2 scale with gene annotation")
+```
+
+#Step 2 - Clean/Filter data* 
+```{r}
+dim(clinData)
+knitr::kable(clinData[1:5, 1:4]) 
+```
+```{r}
+dim(geneExp)
+knitr::kable(geneExp[1:5, 1:4])
+geneExp2<-geneExp[grepl("Tumor", rownames(geneExp)),]
+geneExp2
+geneExp2T <- as.data.frame(t(geneExp2))
+
+
+
+```
+
+#Step 3 - Identify the groups to be compared*
+"RECURRENCE_ANY" column has values "NO" (baseline group) and "YES" (comparison group)
+```{r}
+head(colnames(geneExp2T))
+iCount <- 1 
+newSampleIDsAll <- {}
+while(iCount <= ncol(geneExp2T)) {
+oneRow <- geneExp2T[, iCount ] 
+oneSampleID <- colnames(geneExp2T)[iCount] 
+
+splitValues <- unlist(strsplit(x = oneSampleID, split = "_"))
+newSampleID <- splitValues[2]
+newSampleIDsAll <- c(newSampleIDsAll, newSampleID)
+iCount <- iCount + 1 
+}
+head(newSampleIDsAll)
+colnames(geneExp2T) <- newSampleIDsAll
+geneExp2T
+
+
+```
+
+
+
+
+
+```{r}
+library('dplyr')
+matchingSamples <- which(colnames(geneExp2T) %in% rownames(clinData)) 
+subsetGeneExp <- geneExp2T[ ,matchingSamples]
+subsetGeneExp
+
+baselineGrpLabels <-  which(clinData$RECURRENCE_ANY == 'NO') 
+head(baselineGrpLabels)
+ 
+clinBase <- clinData[baselineGrpLabels, ]
+
+compGrpLabels <- which(clinData$RECURRENCE_ANY == 'YES') 
+head(compGrpLabels)
+clinComp <- clinData[compGrpLabels, ]
+
+```
+```{r}
+
+geneExpTumorBase <- subsetGeneExp[,rownames(clinBase)] 
+geneExpTumorComp <- subsetGeneExp[,rownames(clinComp)]
+geneExpTumorBase
+
+```
+
+#Step 4 - Sanity check*
+```{r}
+rownames(clinBase) == colnames(geneExpTumorBase)
+rownames(clinComp) == colnames(geneExpTumorComp)
+
+
+write.table(rownames(clinBase) , file = "output/ClinBaseIDs.tsv", sep="\t", quote = F  )
+write.table(rownames(clinComp) , file = "output/ClinCompIDs.tsv", sep="\t", quote = F  )
+write.table(colnames(geneExpTumorBase) , 
+            file = "output/GeneExpBaseIDs.tsv", 
+            sep="\t", quote = F  )
+write.table(colnames(geneExpTumorComp) , 
+            file = "output/GeneExpCompIDs.tsv", 
+            sep="\t", quote = F  )
+
+
+write.table(rownames(geneExp),file = "output/genExpFeatureIDsCheck.tsv", sep="\t", quote = F  )
+```
+
+
+
+
+#Step 5 - Prep data for T-test. Call function for T-test*. 
+```{r}
+
+knitr::kable(head(geneExpTumorBase[1:5,1:4]))
+knitr::kable(head(geneExpTumorComp[1:5,1:4]))
+
+```
+
+
+```{r}
+source('fnTTest.R')
+results1 = fnTTest(baseGroup = geneExpTumorBase, 
+                   compGroup = geneExpTumorComp, 
+                   toolN = "20220927_TTest_", 
+                   baseGroupName = "NO",
+                   compGroupName =  "YES",
+                   folderName = "output")
+```
+
+
+
+
+```{r}
+#Read in the T-Test results file
+ttestResults <- read.csv(file = "output/20220927_TTest__YES_(Comp).vs._NO_(Base).TTest.csv")
+
+
+
+```
+
+
+
+```{r}
+# First column is a list of features in format : GDOC_sample id_tumor
+#we already separate the gene and tumor/normal
+funcSplit <- function(featureX) {
+  f1 <- unlist(strsplit(x = featureX, split = "_", fixed = TRUE))
+  f2 <- f1[2]
+  return(f2)
+}
+geneNames1 <- apply(X = as.matrix(ttestResults$Feature), 
+                    MARGIN = 1, FUN = funcSplit)
+
+geneNames20<-head(geneNames1,20)
+geneNames20
+#print length of short listed gene names
+length(geneNames20)
+
+### Export list of gene names
+write.table(x = geneNames1, 
+            file = "output/20220927_SigDiffExpressedGenes.tsv", 
+            quote = F, sep = "\t")
+write.table(x = geneNames20, 
+            file = "output/20220927_top20.tsv", 
+            quote = F, sep = "\t")
+```
+
+
+
+
+
+
