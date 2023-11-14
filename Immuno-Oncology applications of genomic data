@@ -1,0 +1,84 @@
+---
+title: "yuanlian_team2_step1"
+author: "Yuan Lian"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+clinData <- read.csv(file = "input/20191105_BC_ClinData_233rows.csv",
+  
+                       )
+                       
+knitr::kable(head(clinData,n = 5))
+```
+
+
+
+```{r}
+geneExp <- read.csv(file = "input/20191105_BC_GeneExpData_withAnno_233.tsv",
+                      sep="\t",
+                      row.names = 1,
+                      header = T,
+                      
+                      stringsAsFactors = F)
+
+knitr::kable(geneExp[1:5, 1:4], caption = "gene expression data ")
+```
+
+
+```{r}
+knitr::kable(table(clinData$PrimaryBladderCancerType))
+```
+
+
+```{r}
+matchingSamples <- which(colnames(geneExp) %in% clinData$GSMid)
+subsetGeneExp <- geneExp[, matchingSamples]
+
+```
+
+
+```{r}
+baselineGrpLabels <-  which(clinData$PrimaryBladderCancerType == "Normal bladder mucosae")
+head(baselineGrpLabels)
+clinBase <- clinData[baselineGrpLabels, ]
+
+compGrpLabels <- which(clinData$PrimaryBladderCancerType == "Primary_BC_Superficial")
+clinComp <- clinData[compGrpLabels, ]
+head(compGrpLabels)
+```
+
+
+```{r}
+geneExpTumorBase <- subsetGeneExp[, clinBase$GSMid]
+geneExpTumorComp <- subsetGeneExp[, clinComp$GSMid]
+clinBase$GSMid == colnames(geneExpTumorBase)
+clinComp$GSMid == colnames(geneExpTumorComp)
+```
+
+
+
+```{r}
+knitr::kable(head(geneExpTumorBase[1:5,1:4]))
+```
+
+
+```{r}
+knitr::kable(head(geneExpTumorComp[1:5,1:4]))
+```
+
+
+
+```{r}
+source("fnTTest.R")
+
+results1 = fnTTest(baseGroup = geneExpTumorBase,
+                   compGroup = geneExpTumorComp,
+                   toolN = "TTest_",
+                   baseGroupName = "normal",
+                   compGroupName =  "superfacial",
+                   folderName = "output")
+```
+
+
