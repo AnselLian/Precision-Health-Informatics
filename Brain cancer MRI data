@@ -1,0 +1,242 @@
+!pip install pyradiomics
+import os
+import pandas as pd
+import re
+
+from radiomics import featureextractor
+from google.colab import drive
+drive.mount('/content/drive')
+df = pd.DataFrame()
+extractor = featureextractor.RadiomicsFeatureExtractor()
+rootDir = "/content/drive/MyDrive/HIDS 509/Project/Rembrandt Final Data"
+for dirName, subdirList, fileList in os.walk(rootDir):
+    patient = ""
+    for fname in fileList:
+        if re.search("t1_LPS", fname):
+            patient = dirName.split("/")[8].split("_")[0]
+            imagePath = dirName + "/" + fname
+        elif re.search("labels", fname):
+            labelPath = dirName + "/" + fname
+    if patient != "":
+        result = extractor.execute(imagePath, labelPath)
+        df1 = pd.DataFrame(list(result.values()), index = list(result.keys()), columns = [patient])
+        df = pd.concat([df, df1], axis = 1)
+    
+df.transpose()
+df.transpose().to_csv("/content/drive/MyDrive/HIDS 509/Project/Task 1 - Radiomics Features.csv")
+
+
+#Import Packages#
+!pip install linear-tree
+import pandas as pd
+import sklearn, numpy, joblib, imblearn
+
+from collections import Counter
+from sklearn import preprocessing, svm
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from lineartree import LinearForestClassifier, LinearBoostClassifier
+from sklearn.model_selection import train_test_split, cross_validate
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier, AdaBoostClassifier, StackingClassifier
+from sklearn.cluster import KMeans, BisectingKMeans
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from google.colab import drive
+drive.mount('/content/drive')
+#Data Import/Inspection/Cleaning#
+clinicalData = pd.read_csv("/content/drive/MyDrive/HIDS 509/Project/TCGA Clinical Data/2022_TCGA_GBM_LGG_clinical_231patients.csv")
+cliniccalFeatures = pd.read_csv("/content/drive/MyDrive/HIDS 509/Project/TCGA PyRadiomics/TCGA Data for main task/TCGA_pyradiomics_t1.csv")
+
+df = cliniccalFeatures.merge(clinicalData, left_on = "ID", right_on = "Row.names")
+
+#Initial feature selection
+removedFeatures = ["diagnostics_Configuration_EnabledImageTypes", "diagnostics_Configuration_Settings", "diagnostics_Image-original_Hash", 
+                   "diagnostics_Image-original_Maximum", "diagnostics_Image-original_Mean", "diagnostics_Image-original_Minimum", 
+                   "diagnostics_Image-original_Size", "diagnostics_Image-original_Spacing", "diagnostics_Mask-original_BoundingBox", 
+                   "diagnostics_Mask-original_VolumeNum", "diagnostics_Mask-original_VoxelNum", "diagnostics_Mask-original_CenterOfMass",
+                   "diagnostics_Mask-original_CenterOfMassIndex", "diagnostics_Mask-original_Hash", "diagnostics_Mask-original_Size", 
+                   "diagnostics_Mask-original_Spacing", "diagnostics_Versions_Numpy", "ID", 
+                   "diagnostics_Versions_PyRadiomics", "diagnostics_Versions_PyWavelet", "diagnostics_Versions_Python", 
+                   "diagnostics_Versions_SimpleITK", "Source", "Row.names", "Gender", "Race", "diagnostics_Image-original_Dimensionality"]
+
+df = df.drop(removedFeatures, axis=1)
+df.columns
+df.head()
+df = df.drop(df[df.Disease_Type == "Oligoastrocytoma"].index)
+df.dtypes[df.dtypes != "float64"]
+df.replace([numpy.inf, -numpy.inf], numpy.nan, inplace = True)
+df.columns[df.isnull().any()]
+X = df.drop(["Disease_Type"], axis = 1)
+y = df["Disease_Type"]
+Counter(y)
+le = preprocessing.LabelEncoder().fit(["GBM", "Astrocytoma", "Oligodendroglioma"])
+y = le.transform(y)
+Counter(y)
+feature_selector = SelectKBest(mutual_info_classif, k = 10).fit(X, y).get_feature_names_out(df.drop(["Disease_Type"], axis = 1).columns)
+X = df[feature_selector]
+feature_selector
+X.shape
+scaler = sklearn.preprocessing.StandardScaler().fit(X)
+X = scaler.transform(X)
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/scaler.bin"
+joblib.dump(scaler, filename, compress=True)
+
+X, y = imblearn.over_sampling.ADASYN(sampling_strategy = "not majority", random_state = 50).fit_resample(X, y)
+X, y = imblearn.under_sampling.RepeatedEditedNearestNeighbours(sampling_strategy = [1]).fit_resample(X, y)
+X, y = imblearn.over_sampling.KMeansSMOTE(sampling_strategy = "not minority", random_state = 50).fit_resample(X, y)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.15, random_state = 50)
+print(Counter(y))
+print(X_train.shape, X_test.shape, y_train.shape, y_test .shape)
+#SVM#
+SVM = svm.SVC(kernel = "poly", degree = 10, random_state = 50)
+SVM_model = cross_validate(SVM, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+SVM_model["test_score"], SVM_model["train_score"]
+for i in range(3): print(classification_report(y_test, SVM_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/SVM.sav"
+joblib.dump(SVM_model.get("estimator")[2], filename)
+#Random Forest Classifier#
+RFC = RandomForestClassifier(n_estimators = 500, max_depth = 10, min_samples_leaf = 5, max_features = 5)
+RFC_model = cross_validate(RFC, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+RFC_model["test_score"], RFC_model["train_score"]
+for i in range(3): print(classification_report(y_test, RFC_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/RFC.sav"
+joblib.dump(RFC_model.get("estimator")[1], filename)
+for i in range(3):
+    print(pd.DataFrame({"feature": list(feature_selector), "importance": RFC_model.get("estimator")[i].feature_importances_}).sort_values("importance", ascending=False)[:10])
+#Bagging Classifier#
+BC = BaggingClassifier(estimator = sklearn.tree.ExtraTreeClassifier(min_samples_split = 5, random_state = 50), n_estimators = 5)
+BC_model = cross_validate(BC, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+BC_model["test_score"], BC_model["train_score"]
+for i in range(3): print(classification_report(y_test, BC_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/BC.sav"
+joblib.dump(BC_model.get("estimator")[1], filename)
+#AdaBoost Classifier#
+ABC = AdaBoostClassifier(n_estimators = 25)
+ABC_model = cross_validate(ABC, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+ABC_model["test_score"], ABC_model["train_score"]
+for i in range(3): print(classification_report(y_test, ABC_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/ABC.sav"
+joblib.dump(ABC_model.get("estimator")[2], filename)
+cols = df.drop(["Disease_Type"], axis = 1).columns
+for i in range(3):
+    print(pd.DataFrame({"feature": list(feature_selector), "importance": ABC_model.get("estimator")[i].feature_importances_}).sort_values("importance", ascending=False)[:10])
+#K-Means#
+kmeans = KMeans(init = "k-means++", n_clusters = 3, n_init = 50, max_iter = 500, algorithm = "elkan", random_state = 50)
+kmeans_model = cross_validate(kmeans, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+kmeans_model["test_score"], kmeans_model["train_score"]
+for i in range(3): print(classification_report(y_test, kmeans_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/KMeans.sav"
+joblib.dump(kmeans_model.get("estimator")[2], filename)
+#Linear Trees#
+LT = LinearBoostClassifier(base_estimator = LogisticRegression(class_weight = "balanced", max_iter = 10000))
+LT_model = cross_validate(LT, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+LT_model["test_score"], LT_model["train_score"]
+for i in range(3): print(classification_report(y_test, LT_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/LT.sav"
+joblib.dump(LT_model.get("estimator")[1], filename)
+#Stacked#
+stacking_estimators = [("Model 1", LT), ("Model 2", ABC), ("Model 3", BC)]
+stacked = StackingClassifier(estimators = stacking_estimators, passthrough = True)
+stacked_model = cross_validate(stacked, X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+stacked_model["test_score"], stacked_model["train_score"]
+for i in range(3): print(classification_report(y_test, stacked_model.get("estimator")[i].predict(X_test), zero_division = 0))
+filename = "/content/drive/MyDrive/HIDS 509/Project/Models/stacked.sav"
+joblib.dump(stacked_model.get("estimator")[2], filename)
+#Wrapped#
+import matplotlib.pyplot as plt
+sse = [] 
+for i in range(1, 11): 
+    cluster = BisectingKMeans(n_clusters = i, init = 'k-means++', n_init = 50, algorithm = "elkan", random_state = 50)
+    cluster.fit(X) 
+    sse.append(cluster.inertia_)
+
+plt.style.use("fivethirtyeight")
+plt.plot(range(1, 11), sse)
+plt.xticks(range(1, 11))
+plt.xlabel("Number of Clusters")
+plt.ylabel("SSE")
+plt.show()
+cluster = BisectingKMeans(n_clusters = 7, init = 'k-means++', n_init = 50, algorithm = "elkan", random_state = 50).fit(X)
+clustered_X_train, clustered_X_test = cluster.transform(X_train), cluster.transform(X_test)
+base_estimator = sklearn.linear_model.SGDClassifier(loss = "log_loss", alpha = 0.01, early_stopping = True)
+wrapper_estimator = LinearBoostClassifier(base_estimator = base_estimator, n_estimators = 20, loss = "entropy", max_depth = None, min_samples_split = 10)
+main_estimator= AdaBoostClassifier(estimator = wrapper_estimator)
+main_model = cross_validate(main_estimator, clustered_X_train, y_train, cv = 3, return_train_score = True, return_estimator = True)
+
+main_model["test_score"], main_model["train_score"]
+for i in range(3): print(classification_report(y_test, main_model.get("estimator")[i].predict(clustered_X_test), zero_division = 0))
+joblib.dump(cluster,  "/content/drive/MyDrive/HIDS 509/Project/Models/cluster.sav")
+joblib.dump(main_model.get("estimator")[2],  "/content/drive/MyDrive/HIDS 509/Project/Models/wrapped.sav")
+
+
+#Packages#
+!pip install linear-tree
+import pandas as pd
+import sklearn, numpy, joblib, scipy.stats
+
+from sklearn.metrics import classification_report
+from google.colab import drive
+drive.mount('/content/drive')
+#Data Import/Inspection/Cleaning#
+df = pd.read_csv("/content/drive/MyDrive/HIDS 509/Project/Extracted Radiomic Features.csv")
+df.head()
+scaler = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/scaler.bin")
+cols = scaler.get_feature_names_out()
+X = df.drop(columns = [col for col in df if col not in cols])
+X = df[cols]
+id = df["Unnamed: 0"]
+X.columns
+X.replace([numpy.inf, -numpy.inf], numpy.nan, inplace = True)
+X.columns[X.isnull().any()]
+X = scaler.transform(X)
+#Load Models & Predict#
+le = sklearn.preprocessing.LabelEncoder().fit(["GBM", "Astrocytoma", "Oligodendroglioma"])
+SVM = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/SVM.sav")
+SVM_y_pred = le.inverse_transform(SVM.predict(X))
+
+RFC = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/RFC.sav")
+RFC_y_pred = le.inverse_transform(RFC.predict(X))
+
+BC = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/BC.sav")
+BC_y_pred = le.inverse_transform(BC.predict(X))
+
+ABC = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/ABC.sav")
+ABC_y_pred = le.inverse_transform(ABC.predict(X))
+
+kmeans = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/KMeans.sav")
+kmeans_y_pred = le.inverse_transform(kmeans.predict(X))
+
+LT = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/LT.sav")
+LT_y_pred = le.inverse_transform(LT.predict(X))
+
+stacked = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/stacked.sav")
+stacked_y_pred = le.inverse_transform(stacked.predict(X))
+
+
+X_cluster = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/cluster.sav").transform(X)
+wrapped = joblib.load("/content/drive/MyDrive/HIDS 509/Project/Models/wrapped.sav")
+wrapped_y_pred = le.inverse_transform(wrapped.predict(X_cluster))
+data = {"ID": id,"SVM": SVM_y_pred, "Random Forest": RFC_y_pred, "Bagging": BC_y_pred, "AdaBoost": ABC_y_pred, 
+        "K-Means": kmeans_y_pred, "LT": LT_y_pred, "stacked": stacked_y_pred, "wrapped": wrapped_y_pred}
+results = pd.DataFrame(data)
+results.head()
+#Performance Comparison#
+ground_truth = pd.read_csv("/content/drive/MyDrive/HIDS 509/Project/Rembrandt_Clinical_Truth_Final64Set.tsv", sep = '\t')
+ground_truth
+results = results.merge(ground_truth, left_on = "ID", right_on = "64.patient.set")
+results.columns
+results = results.drop(["64.patient.set", "AGE_RANGE", "GENDER"], axis = 1)
+results = results.dropna(axis = 0)
+results.head()
+results.loc[results["DISEASE_TYPE"] == "ASTROCYTOMA",  "DISEASE_TYPE"] = "Astrocytoma"
+results.loc[results["DISEASE_TYPE"] == "OLIGODENDROGLIOMA",  "DISEASE_TYPE"] = "Oligodendroglioma"
+results.to_csv("/content/drive/MyDrive/HIDS 509/Project/Predicted Results.csv")
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["SVM"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["Random Forest"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["Bagging"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["AdaBoost"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["K-Means"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["LT"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["stacked"]), zero_division = 0))
+print(classification_report(le.transform(results["DISEASE_TYPE"]), le.transform(results["wrapped"]), zero_division = 0))
